@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Hourglass: Tavern Tales</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="app">
+    <header>
+        <p class="eyebrow">Hourglass · Combat Prototype</p>
+        <h1>RPG Game</h1>
+        <p class="subtitle">
+            A tale of one adventurer, told across two dangerous rounds of the world.
+        </p>
+    </header>
+
+    <section id="game" aria-live="polite"></section>
+
+    <details class="rules">
+        <summary>How this prototype works</summary>
+        <p>
+            At each round, draw tokens into an eight-token reserve. Select a token,
+            then choose an action to assign it. Completed actions resolve when you
+            resolve the round; incomplete actions hold their tokens. Speed adds
+            initiative, Health adds healing/potency, and every Critical token must
+            pass a 50% flip or the whole action fails.
+        </p>
+    </details>
+</main>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
