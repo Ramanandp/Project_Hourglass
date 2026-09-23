@@ -11,7 +11,7 @@ function resolutionPanel(battle) {
   const next = game.resolution?.queue[game.resolution.index];
   const headline = next ? `${next.side === 'hero' ? game.hero.name : game.enemy.name}: ${next.data.name}` : 'Round complete';
   const detail = next ? `Next at initiative ${next.initiative}` : 'Preparing the next round';
-  return `<div class="resolution-panel" aria-live="polite"><div class="versus">VS<br><small>Battle ${battle}/2</small></div><p class="resolution-state">${game.phase === 'resolving' ? 'Resolving round' : `Round ${game.round}`}</p><h3>${esc(headline)}</h3><p class="resolution-detail">${esc(detail)}</p><ol class="battle-log">${game.log.slice(0, 4).map(item => `<li class="${item.type}">${esc(item.text)}</li>`).join('')}</ol></div>`;
+  return `<div class="resolution-panel" aria-live="polite"><div class="versus">VS<br><small>Battle ${battle}/2</small></div><p class="resolution-state">${game.phase === 'resolving' ? 'Resolving round' : `Round ${game.round}`}</p><h3>${esc(headline)}</h3><p class="resolution-detail">${esc(detail)}</p><ol class="battle-log" aria-label="Battle chronicle">${game.log.map(item => `<li class="${item.type}">${esc(item.text)}</li>`).join('')}</ol></div>`;
 }
 function showEffects(effects = []) {
   const added = effects.filter(effect => effect.delta !== 0).map(effect => ({ ...effect, id: ++effectId }));
