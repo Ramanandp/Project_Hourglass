@@ -1,4 +1,4 @@
-import { createGame, assignToken, removeToken, startRoundResolution, resolveNextAction, continueBattle, TOKEN_META, actionComplete, currentAction, actionPreview, compatible, WATCHTOWER_QUEST, acceptQuest, chooseOutboundTravel, chooseQuestNode, restAtQuestNode, finishQuest, resolveReturnTravel, returnToTavern } from './game.js';
+import { createGame, assignToken, removeToken, startRoundResolution, resolveNextAction, continueBattle, TOKEN_META, actionComplete, currentAction, actionPreview, compatible, WATCHTOWER_QUEST, acceptQuest, chooseOutboundTravel, chooseQuestNode, restAtQuestNode, finishQuest, resolveReturnTravel, returnToTavern, questRoute } from './game.js';
 
 const root = document.querySelector('#game');
 let game = createGame(); let selected = null; let resolutionTimer = null; let effectId = 0; let floatingEffects = []; let transcriptScrollTop = 0; let transcriptFollowsLatest = true; let draggedToken = null;
@@ -56,6 +56,10 @@ function showDropTargets() {
   });
 }
 function campaignBar() { return `<div class="campaign-bar"><span>Day <b>${game.day}</b></span><span>Gold <b>${game.gold}</b></span><span>${game.hero.name} · ${game.hero.hp}/${game.hero.maxHp} HP</span></div>`; }
+function questRouteView() {
+  const nodes = questRoute(game); if (!nodes.length) return '';
+  return `<nav class="quest-route" aria-label="Quest route"><p>Quest route</p><ol>${nodes.map(node => `<li class="route-node ${node.status}${node.completed ? ' completed' : ''}" ${node.status === 'current' ? 'aria-current="step"' : ''}><b aria-hidden="true">${node.completed ? '✓' : node.status === 'current' ? '●' : '○'}</b><span>${esc(node.label)}</span></li>`).join('')}</ol></nav>`;
+}
 function tavernView() {
   const exhausted = game.hero.hp <= 0;
   if (game.completedQuest) return `<section class="summary won"><p class="eyebrow">The tavern, day ${game.day}</p><h2>The board is quiet</h2><p>The Old Watchtower has been cleared. Mara’s tale is now part of the tavern’s history.</p><p><b>${game.gold} gold</b> carried home.</p><button class="primary" data-restart>Start a fresh tale</button></section>`;
@@ -79,10 +83,10 @@ function render() {
     transcriptFollowsLatest = previousTranscript.scrollHeight - previousTranscript.scrollTop - previousTranscript.clientHeight < 8;
   }
   if (['intro', 'tavern'].includes(game.phase)) { root.innerHTML = campaignBar() + tavernView(); return; }
-  if (game.phase === 'outbound-travel') { root.innerHTML = campaignBar() + travelView(); return; }
-  if (game.phase === 'quest-map') { root.innerHTML = campaignBar() + mapView(); return; }
-  if (game.phase === 'rest') { root.innerHTML = campaignBar() + restView(); return; }
-  if (game.phase === 'return-travel') { root.innerHTML = campaignBar() + returnTravelView(); return; }
+  if (game.phase === 'outbound-travel') { root.innerHTML = campaignBar() + questRouteView() + travelView(); return; }
+  if (game.phase === 'quest-map') { root.innerHTML = campaignBar() + questRouteView() + mapView(); return; }
+  if (game.phase === 'rest') { root.innerHTML = campaignBar() + questRouteView() + restView(); return; }
+  if (game.phase === 'return-travel') { root.innerHTML = campaignBar() + questRouteView() + returnTravelView(); return; }
   if (game.phase === 'quest-result') { root.innerHTML = campaignBar() + resultView(); return; }
   const enemy = game.enemy; const battle = game.battleIndex + 1; const available = game.reserve.map((t,i) => token(t,i)).join('') || '<span class="empty">No reserve tokens</span>';
   if (game.phase === 'summary') { const won = game.hero.hp > 0; root.innerHTML = `<section class="summary ${won?'won':'lost'}"><p class="eyebrow">${won?'A story well told':'An unfinished tale'}</p><h2>${won ? 'Encounter Complete' : 'Mara Has Fallen'}</h2><p>${won ? 'The Gargoyle crumbles into dust as the tavern erupts in applause.' : 'The encounter ends, but the next telling begins with what you learned.'}</p><div class="summary-grid"><b>Battles ${game.battleIndex + 1}/${2}</b><b>Rounds ${game.round}</b><b>Tokens drawn ${game.metrics.draws}</b><b>Actions resolved ${game.metrics.actions}</b><b>Critical successes ${game.metrics.critSuccesses}</b><b>Critical failures ${game.metrics.critFailures}</b></div><button class="primary" data-restart>Tell it again</button></section>`; return; }

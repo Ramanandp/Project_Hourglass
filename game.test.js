@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, TOKEN, assignToken, removeToken, actionComplete, resolveRound, startRoundResolution, resolveNextAction, resolveHeroAction, drawRound, drawEnemyCard, buildBag, compatible, currentAction, actionPreview, continueBattle, WATCHTOWER_QUEST, acceptQuest, chooseOutboundTravel, chooseQuestNode, restAtQuestNode, finishQuest, resolveReturnTravel, finishBattle, endQuest, returnToTavern } from './game.js';
+import { createGame, TOKEN, assignToken, removeToken, actionComplete, resolveRound, startRoundResolution, resolveNextAction, resolveHeroAction, drawRound, drawEnemyCard, buildBag, compatible, currentAction, actionPreview, continueBattle, WATCHTOWER_QUEST, acceptQuest, chooseOutboundTravel, chooseQuestNode, restAtQuestNode, finishQuest, resolveReturnTravel, finishBattle, endQuest, returnToTavern, questRoute } from './game.js';
 
 const readyGame = seed => { const game = createGame(seed); continueBattle(game); return game; };
 
@@ -69,4 +69,22 @@ test('a deterministic tavern-to-completion flow returns Mara with the quest rewa
   assert.equal(resolveReturnTravel(game), true);
   assert.deepEqual(game.questHistory.at(-1), { title: WATCHTOWER_QUEST.title, outcome: 'completed', days: 3, reward: 25, cacheFound: false });
   assert.equal(returnToTavern(game), true);
+});
+
+test('quest route exposes only current and immediate route nodes outside combat', () => {
+  const game = createGame(); acceptQuest(game);
+  assert.deepEqual(questRoute(game).map(node => [node.id, node.status]), [['town', 'completed'], ['outbound', 'current']]);
+  chooseOutboundTravel(game, 'bramble');
+  assert.deepEqual(questRoute(game).map(node => [node.id, node.status]), [['town', 'completed'], ['outbound', 'completed'], ['crossroads', 'current'], ['shrine', 'available'], ['watchtower', 'available']]);
+  chooseQuestNode(game, 'rest'); assert.equal(game.quest.currentNode, 'shrine');
+  assert.deepEqual(questRoute(game).map(node => [node.id, node.status]), [['town', 'completed'], ['outbound', 'completed'], ['crossroads', 'completed'], ['shrine', 'current'], ['watchtower', 'available']]);
+  restAtQuestNode(game, 1); assert.equal(game.quest.currentNode, 'shrine');
+  assert.deepEqual(questRoute(game).map(node => [node.id, node.status]), [['town', 'completed'], ['outbound', 'completed'], ['shrine', 'current'], ['watchtower', 'available']]);
+  chooseQuestNode(game, 'watchtower'); assert.equal(game.quest.currentNode, 'watchtower'); assert.deepEqual(questRoute(game), []);
+  game.battleIndex = 1; finishBattle(game);
+  assert.deepEqual(questRoute(game).map(node => [node.id, node.status]), [['town', 'completed'], ['outbound', 'completed'], ['shrine', 'completed'], ['watchtower', 'current'], ['archive', 'available'], ['return', 'available']]);
+  chooseQuestNode(game, 'cache'); assert.equal(game.quest.currentNode, 'archive');
+  assert.equal(questRoute(game).find(node => node.id === 'archive').status, 'current');
+  finishQuest(game); assert.equal(game.quest.currentNode, 'return');
+  assert.equal(questRoute(game).find(node => node.id === 'return').status, 'current');
 });
