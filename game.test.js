@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, TOKEN, assignToken, removeToken, actionComplete, resolveRound, startRoundResolution, resolveNextAction, resolveHeroAction, drawRound, drawEnemyCard, buildBag, compatible, currentAction, actionPreview, continueBattle } from './game.js';
+import { createGame, TOKEN, assignToken, removeToken, actionComplete, resolveRound, startRoundResolution, resolveNextAction, resolveHeroAction, drawRound, drawEnemyCard, buildBag, compatible, currentAction, actionPreview, continueBattle, WATCHTOWER_QUEST, acceptQuest, chooseOutboundTravel, chooseQuestNode, restAtQuestNode, finishQuest, resolveReturnTravel, finishBattle, endQuest, returnToTavern } from './game.js';
 
 const readyGame = seed => { const game = createGame(seed); continueBattle(game); return game; };
 
@@ -22,3 +22,51 @@ test('lethal final action waits before the battle transitions', () => { const ga
 test('round resolution holds the final result before entering planning', () => { const game = readyGame(17); game.reserve = [TOKEN.PHYSICAL]; assignToken(game, 0, 'quick-strike'); game.enemy.drawPile = [0]; const enemyHp = game.enemy.hp; assert.equal(startRoundResolution(game), true); assert.equal(game.phase, 'resolving'); assert.equal(game.resolution.queue.length, 2); const result = resolveNextAction(game); assert.equal(result.name, 'Quick Strike'); assert.ok(game.enemy.hp < enemyHp); assert.equal(game.phase, 'resolving'); resolveNextAction(game); assert.equal(game.phase, 'resolving'); assert.equal(game.resolution.awaitingFinish, true); assert.equal(game.combatMessage.state, 'Final action resolved'); resolveNextAction(game); assert.equal(game.phase, 'planning'); assert.equal(game.combatMessage.state, 'Allocate tokens'); });
 test('resolution results expose applied armor and health changes', () => { const game = readyGame(19); game.hero.armor = 5; game.enemy.drawPile = [0]; startRoundResolution(game); const result = resolveNextAction(game); assert.deepEqual(result.effects, [{ target: 'hero-armor', delta: -4, label: '-4 Armor' }]); assert.equal(game.hero.hp, game.hero.maxHp); });
 test('enemy attack stays hidden until its scheduled resolution', () => { const game = readyGame(23); game.reserve = [TOKEN.PHYSICAL]; assignToken(game, 0, 'quick-strike'); game.enemy.drawPile = [0]; startRoundResolution(game); assert.equal(game.combatMessage.text, 'Actions are set. The enemy prepares an attack.'); assert.equal(game.log.some(item => item.text.includes('Slash')), false); const heroResult = resolveNextAction(game); assert.match(heroResult.message, /^Mara uses Quick Strike!/); assert.equal(game.log.some(item => item.text.includes('uses Slash')), false); const enemyResult = resolveNextAction(game); assert.match(enemyResult.message, /uses Slash!/); assert.equal(game.combatMessage.state, 'Final action resolved'); resolveNextAction(game); assert.equal(game.combatMessage.state, 'Allocate tokens'); });
+
+test('the Watchtower listing has the promised board metadata and only accepts once', () => {
+  const game = createGame();
+  assert.equal(WATCHTOWER_QUEST.rewardGold, 25);
+  assert.match(WATCHTOWER_QUEST.location, /Watchtower/);
+  assert.equal(acceptQuest(game), true);
+  assert.equal(game.phase, 'outbound-travel');
+  assert.equal(acceptQuest(game), false);
+});
+
+test('travel, rest, encounter, and archive nodes advance the quest calendar', () => {
+  const game = createGame(); acceptQuest(game);
+  chooseOutboundTravel(game, 'bramble'); assert.equal(game.day, 2);
+  chooseQuestNode(game, 'rest'); assert.equal(game.phase, 'rest');
+  game.hero.hp = 4; restAtQuestNode(game, 2); assert.equal(game.day, 4); assert.equal(game.hero.hp, 14);
+  chooseQuestNode(game, 'watchtower'); assert.equal(game.phase, 'planning'); assert.equal(game.day, 5);
+  game.battleIndex = 1; finishBattle(game); assert.equal(game.phase, 'quest-map'); assert.equal(game.quest.objectiveComplete, true);
+  chooseQuestNode(game, 'cache'); assert.equal(game.day, 6); assert.equal(game.quest.bonusGold, 10);
+});
+
+test('quest completion grants base and cache rewards then clears quest-local armor and evolution', () => {
+  const game = createGame(); acceptQuest(game); chooseOutboundTravel(game, 'lantern');
+  game.quest.objectiveComplete = true; game.quest.bonusGold = 10; game.hero.armor = 8; game.actions[0].evolved = true;
+  assert.equal(finishQuest(game), true); assert.equal(game.phase, 'return-travel');
+  assert.equal(resolveReturnTravel(game), true); assert.equal(game.phase, 'quest-result');
+  assert.equal(game.gold, 35); assert.equal(game.hero.armor, 0); assert.equal(game.actions[0].evolved, false);
+  assert.equal(game.completedQuest, true); assert.equal(returnToTavern(game), true); assert.equal(game.phase, 'tavern');
+});
+
+test('abandoning or being defeated forfeits rewards and records the outcome', () => {
+  const abandoned = createGame(); acceptQuest(abandoned); chooseOutboundTravel(abandoned, 'bramble');
+  assert.equal(finishQuest(abandoned), true); assert.equal(abandoned.questHistory.at(-1).outcome, 'abandoned'); assert.equal(abandoned.gold, 0);
+  const defeated = createGame(); acceptQuest(defeated); defeated.hero.armor = 5; assert.equal(endQuest(defeated, 'defeated'), true);
+  assert.equal(defeated.questHistory.at(-1).outcome, 'defeated'); assert.equal(defeated.gold, 0); assert.equal(defeated.hero.armor, 0);
+});
+
+test('a deterministic tavern-to-completion flow returns Mara with the quest reward', () => {
+  const game = createGame(99);
+  assert.equal(acceptQuest(game), true);
+  assert.equal(chooseOutboundTravel(game, 'bramble'), true);
+  assert.equal(chooseQuestNode(game, 'watchtower'), true);
+  game.battleIndex = 1; finishBattle(game);
+  assert.equal(game.quest.objectiveComplete, true);
+  assert.equal(finishQuest(game), true);
+  assert.equal(resolveReturnTravel(game), true);
+  assert.deepEqual(game.questHistory.at(-1), { title: WATCHTOWER_QUEST.title, outcome: 'completed', days: 3, reward: 25, cacheFound: false });
+  assert.equal(returnToTavern(game), true);
+});

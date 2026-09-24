@@ -40,6 +40,12 @@ export const ENCOUNTER = Object.freeze([
   ] },
 ]);
 
+export const WATCHTOWER_QUEST = Object.freeze({
+  id: 'old-watchtower', title: 'Clear the Old Watchtower', objective: 'Defeat the threats occupying the Old Watchtower.',
+  location: 'Old Watchtower · 2 days from town', estimatedDays: '4–6 days', enemies: 'Bandit Captain, unknown stone guardian',
+  risk: 'High risk', rewardGold: 25, expiration: 'Day 12',
+});
+
 export function seededRandom(seed = 8675309) { let state = seed >>> 0; return () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 4294967296; }; }
 export function shuffle(items, rng) { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
 export function buildBag(stats = HERO.stats) { return [ ...Array(stats.vitality).fill(TOKEN.HEALTH), ...Array(stats.strength).fill(TOKEN.PHYSICAL), ...Array(stats.intelligence).fill(TOKEN.MAGICAL), ...Array(stats.dexterity).fill(TOKEN.SPECIAL), ...Array(stats.speed).fill(TOKEN.SPEED), ...Array(stats.luck).fill(TOKEN.CRITICAL) ]; }
@@ -63,10 +69,57 @@ export function actionPreview(action) {
   return { data, basePotency: data.potency, potency: data.potency + bonus, bonus, health, healthAmount, baseInitiative: data.initiative, initiative: data.initiative + speed, speed, criticals, criticalMultiplier: criticals * 2 };
 }
 export function createGame(seed = 8675309) {
-  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], enemy: null, resolution: null, combatMessage: null };
+  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', day: 1, gold: 0, quest: null, completedQuest: false, questHistory: [], battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], enemy: null, resolution: null, combatMessage: null };
 }
 export function log(game, text, type = 'info') { game.log.unshift({ text, type }); }
 export function setCombatMessage(game, text, type = 'info', state = '') { game.combatMessage = { text, type, state }; }
+export function acceptQuest(game, questId = WATCHTOWER_QUEST.id) {
+  if (!['intro', 'tavern'].includes(game.phase) || game.quest || game.completedQuest || questId !== WATCHTOWER_QUEST.id) return false;
+  game.quest = { id: questId, startedDay: game.day, days: 0, objectiveComplete: false, rested: false, cacheFound: false, bonusGold: 0, outcome: null };
+  game.phase = 'outbound-travel'; log(game, `Accepted: ${WATCHTOWER_QUEST.title}.`, 'event'); return true;
+}
+export function chooseOutboundTravel(game, choice) {
+  if (game.phase !== 'outbound-travel' || !game.quest || !['lantern', 'bramble'].includes(choice)) return false;
+  const cautious = choice === 'lantern'; const days = cautious ? 2 : 1; const healing = cautious ? 2 : 0;
+  advanceQuestDays(game, days); if (healing) game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + healing);
+  game.phase = 'quest-map'; log(game, cautious ? 'A lantern-lit detour keeps the road kind.' : 'The brambles scratch at Mara’s sleeves, but the shortcut holds.', 'event'); return true;
+}
+export function chooseQuestNode(game, node) {
+  if (game.phase !== 'quest-map' || !game.quest) return false;
+  if (node === 'rest' && !game.quest.rested && !game.quest.objectiveComplete) { game.phase = 'rest'; return true; }
+  if (node === 'watchtower' && !game.quest.objectiveComplete) return startQuestEncounter(game);
+  if (node === 'cache' && game.quest.objectiveComplete && !game.quest.cacheFound) { advanceQuestDays(game, 1); game.quest.cacheFound = true; game.quest.bonusGold += 10; log(game, 'A hidden cache yields 10 bonus gold.', 'good'); return true; }
+  return false;
+}
+export function restAtQuestNode(game, days) {
+  if (game.phase !== 'rest' || !game.quest || ![1, 2].includes(days)) return false;
+  advanceQuestDays(game, days); game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + days * 5); game.quest.rested = true; game.phase = 'quest-map'; log(game, `Rested safely for ${days} day${days === 1 ? '' : 's'}.`, 'good'); return true;
+}
+export function startQuestEncounter(game) {
+  if (game.phase !== 'quest-map' || !game.quest || game.quest.objectiveComplete) return false;
+  advanceQuestDays(game, 1); game.battleIndex = 0; game.round = 0; startBattle(game); return true;
+}
+export function finishQuest(game) {
+  if (!['quest-map', 'rest'].includes(game.phase) || !game.quest) return false;
+  if (!game.quest.objectiveComplete) return endQuest(game, 'abandoned');
+  game.phase = 'return-travel'; return true;
+}
+export function resolveReturnTravel(game) {
+  if (game.phase !== 'return-travel' || !game.quest) return false;
+  advanceQuestDays(game, 1); return endQuest(game, 'completed');
+}
+export function advanceQuestDays(game, days) { game.day += days; if (game.quest) game.quest.days += days; }
+export function endQuest(game, outcome) {
+  if (!game.quest) return false;
+  const quest = game.quest; quest.outcome = outcome;
+  const reward = outcome === 'completed' ? WATCHTOWER_QUEST.rewardGold + quest.bonusGold : 0;
+  game.gold += reward;
+  game.questHistory.push({ title: WATCHTOWER_QUEST.title, outcome, days: quest.days, reward, cacheFound: quest.cacheFound });
+  game.completedQuest ||= outcome === 'completed'; game.quest = null; game.hero.armor = 0; game.actions.forEach(action => { action.evolved = false; action.assigned = []; });
+  game.phase = 'quest-result'; game.enemy = null; game.resolution = null; game.reserve = []; game.bag = []; game.discard = [];
+  log(game, outcome === 'completed' ? `Quest complete. Earned ${reward} gold.` : `Quest ${outcome}; no rewards earned.`, outcome === 'completed' ? 'victory' : 'defeat'); return true;
+}
+export function returnToTavern(game) { if (game.phase !== 'quest-result') return false; game.phase = 'tavern'; return true; }
 export function startBattle(game) {
   game.bag = shuffle(buildBag(), game.rng); game.discard = []; game.reserve = []; game.actions.forEach(a => a.assigned = []); game.enemy = createEnemy(ENCOUNTER[game.battleIndex], game.rng); game.phase = 'planning';
   const message = `A ${game.enemy.name} appears!`;
@@ -169,7 +222,7 @@ export function advanceCriticalGamble(game, resolution) {
 export function finishRoundResolution(game) {
   if (game.phase !== 'resolving') return null;
   game.resolution = null;
-  if (game.hero.hp <= 0) { game.phase = 'summary'; const message = 'Mara falls. The tavern grows quiet.'; log(game, message, 'defeat'); setCombatMessage(game, message, 'defeat', 'Defeat'); return { finished: 'defeat' }; }
+  if (game.hero.hp <= 0) { if (game.quest) { endQuest(game, 'defeated'); return { finished: 'defeat' }; } game.phase = 'summary'; const message = 'Mara falls. The tavern grows quiet.'; log(game, message, 'defeat'); setCombatMessage(game, message, 'defeat', 'Defeat'); return { finished: 'defeat' }; }
   if (game.enemy.hp <= 0) { finishBattle(game); return { finished: 'victory' }; }
   game.phase = 'planning'; drawRound(game);
   return { finished: 'planning' };
@@ -200,5 +253,5 @@ export function resolveEnemyAction(game, card, initiative) {
   log(game, message, applied ? 'bad' : 'good'); if (card.evolve) card.evolved = !card.evolved;
   return { side: 'enemy', name: data.name, initiative, message, type: applied ? 'bad' : 'good', effects };
 }
-export function finishBattle(game) { const victory = `${game.enemy.name} is defeated!`; log(game, victory, 'victory'); setCombatMessage(game, victory, 'victory', 'Victory'); if (game.battleIndex === ENCOUNTER.length - 1) { game.phase = 'summary'; const message = 'The encounter is complete. Your story earns a round of applause.'; log(game, message, 'victory'); setCombatMessage(game, message, 'victory', 'Victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'No rest—another shape moves in the candlelight.', 'event'); }
+export function finishBattle(game) { const victory = `${game.enemy.name} is defeated!`; log(game, victory, 'victory'); setCombatMessage(game, victory, 'victory', 'Victory'); if (game.battleIndex === ENCOUNTER.length - 1) { if (game.quest) { game.quest.objectiveComplete = true; game.phase = 'quest-map'; log(game, 'The Old Watchtower is clear. You may search its ruins or finish the quest.', 'victory'); return; } game.phase = 'summary'; const message = 'The encounter is complete. Your story earns a round of applause.'; log(game, message, 'victory'); setCombatMessage(game, message, 'victory', 'Victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'No rest—another shape moves in the candlelight.', 'event'); }
 export function continueBattle(game) { if (['intro', 'battle-transition'].includes(game.phase)) startBattle(game); }
