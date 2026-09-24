@@ -53,20 +53,35 @@ export function compatible(action, token) {
   return required > assigned || action.bonus.includes(token);
 }
 export function currentAction(action) { return action.evolved ? { ...action, name: action.evolve.name, potency: action.evolve.potency, initiative: action.evolve.initiative } : action; }
+export function actionPreview(action) {
+  const data = currentAction(action);
+  const bonus = data.bonus.filter(token => token !== TOKEN.HEALTH).reduce((total, token) => total + Math.max(0, tokenCount(action.assigned, token) - tokenCount(action.base, token)) * 2, 0);
+  const health = Math.max(0, tokenCount(action.assigned, TOKEN.HEALTH) - tokenCount(action.base, TOKEN.HEALTH));
+  const healthAmount = health * 2;
+  const speed = tokenCount(action.assigned, TOKEN.SPEED);
+  const criticals = tokenCount(action.assigned, TOKEN.CRITICAL);
+  return { data, basePotency: data.potency, potency: data.potency + bonus, bonus, health, healthAmount, baseInitiative: data.initiative, initiative: data.initiative + speed, speed, criticals, criticalMultiplier: criticals * 2 };
+}
 export function createGame(seed = 8675309) {
-  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], enemy: null, resolution: null };
+  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], enemy: null, resolution: null, combatMessage: null };
 }
 export function log(game, text, type = 'info') { game.log.unshift({ text, type }); }
+export function setCombatMessage(game, text, type = 'info', state = '') { game.combatMessage = { text, type, state }; }
 export function startBattle(game) {
   game.bag = shuffle(buildBag(), game.rng); game.discard = []; game.reserve = []; game.actions.forEach(a => a.assigned = []); game.enemy = createEnemy(ENCOUNTER[game.battleIndex], game.rng); game.phase = 'planning';
-  log(game, `Battle ${game.battleIndex + 1}: ${game.enemy.name} emerges from the tavern tale.`, 'event'); drawRound(game);
+  const message = `A ${game.enemy.name} appears!`;
+  log(game, message, 'event'); setCombatMessage(game, message, 'event', `Battle ${game.battleIndex + 1}`); drawRound(game);
 }
 export function drawOne(game) { if (!game.bag.length && game.discard.length) { game.bag = shuffle(game.discard, game.rng); game.discard = []; log(game, 'The discard pile returns to your bag.', 'event'); } if (!game.bag.length) return null; return game.bag.pop(); }
 export function drawRound(game) {
   game.round++; let drawn = [];
   const attempts = 4 + [...Array(4)].filter(() => game.rng() < HERO.stats.luck / (HERO.stats.luck + 20)).length;
   for (let i = 0; i < attempts && game.reserve.length < 8; i++) { const token = drawOne(game); if (token) { game.reserve.push(token); drawn.push(token); } }
-  game.metrics.draws += drawn.length; log(game, `Round ${game.round}: drew ${drawn.map(t => TOKEN_META[t].short).join(', ') || 'nothing'} (${game.reserve.length}/8 reserve).`, 'draw'); return drawn;
+  game.metrics.draws += drawn.length;
+  log(game, `Round ${game.round}: drew ${drawn.map(t => TOKEN_META[t].short).join(', ') || 'nothing'} (${game.reserve.length}/8 reserve).`, 'draw');
+  const message = `Round ${game.round}: allocate your tokens to prepare actions.`;
+  log(game, message, 'event'); setCombatMessage(game, message, 'event', 'Allocate tokens');
+  return drawn;
 }
 export function assignToken(game, reserveIndex, actionId) {
   if (game.phase !== 'planning') return false; const action = game.actions.find(a => a.id === actionId); const token = game.reserve[reserveIndex]; if (!action || !token || !compatible(action, token)) return false;
@@ -79,29 +94,82 @@ export function startRoundResolution(game) {
   game.phase = 'resolving';
   const completed = game.actions.filter(actionComplete);
   const enemyCard = drawEnemyCard(game);
-  const queue = [...completed.map(action => ({ side: 'hero', action, data: currentAction(action), initiative: currentAction(action).initiative + tokenCount(action.assigned, TOKEN.SPEED) })), { side: 'enemy', data: enemyCard, initiative: enemyCard.initiative }]
+  const queue = [...completed.map(action => { const preview = actionPreview(action); return { side: 'hero', action, data: preview.data, initiative: preview.initiative }; }), { side: 'enemy', data: enemyCard, initiative: enemyCard.initiative }]
     .sort((a, b) => b.initiative - a.initiative || (a.side === 'hero' ? -1 : 1));
   game.resolution = { queue, index: 0, last: null };
-  log(game, `${game.enemy.name} reveals ${enemyCard.name}.`, 'event');
+  setCombatMessage(game, 'Actions are set. The enemy prepares an attack.', 'event', 'Preparing actions');
   return true;
 }
 export function resolveNextAction(game) {
   if (game.phase !== 'resolving' || !game.resolution) return null;
   const resolution = game.resolution;
+  if (resolution.awaitingFinish) return finishRoundResolution(game);
+  if (resolution.pendingCritical) return advanceCriticalGamble(game, resolution);
   const item = resolution.queue[resolution.index];
   if (!item || game.hero.hp <= 0 || game.enemy.hp <= 0) return finishRoundResolution(game);
+  if (item.side === 'hero') {
+    const crits = tokenCount(item.action.assigned, TOKEN.CRITICAL);
+    if (crits) return beginCriticalGamble(game, resolution, item, crits);
+  }
   const result = item.side === 'hero'
     ? resolveHeroAction(game, item.action, item.data, item.initiative)
     : resolveEnemyAction(game, item.data, item.initiative);
+  finishQueueItem(game, resolution, item, result);
+  return result;
+}
+export function finishQueueItem(game, resolution, item, result) {
   resolution.index++;
   resolution.last = result;
-  if (game.hero.hp <= 0 || game.enemy.hp <= 0 || resolution.index >= resolution.queue.length) finishRoundResolution(game);
+  const finalAction = game.hero.hp <= 0 || game.enemy.hp <= 0 || resolution.index >= resolution.queue.length;
+  setCombatMessage(game, result.message, result.type, finalAction ? 'Final action resolved' : (item.side === 'hero' ? 'Mara acts' : 'Enemy action revealed'));
+  if (finalAction) resolution.awaitingFinish = true;
+}
+export function beginCriticalGamble(game, resolution, item, crits) {
+  const flips = [...Array(crits)].map(() => game.rng() < 0.5);
+  resolution.pendingCritical = { item, flips, revealed: 0, mode: 'spinning', outcome: null, multiplier: 0 };
+  setCombatMessage(game, `Mara risks ${crits} Critical ${crits === 1 ? 'coin' : 'coins'}!`, 'event', `Critical flip 1/${crits}`);
+  return { kind: 'critical-spin', side: 'hero', critical: { flip: 1, total: crits } };
+}
+export function advanceCriticalGamble(game, resolution) {
+  const critical = resolution.pendingCritical;
+  if (critical.mode === 'spinning') {
+    const success = critical.flips[critical.revealed];
+    critical.revealed++;
+    critical.mode = 'revealed';
+    if (!success) {
+      critical.outcome = 'failed'; critical.multiplier = 0; game.metrics.critFailures++;
+      const message = 'Critical gamble failed! x0.';
+      log(game, message, 'bad'); setCombatMessage(game, message, 'bad', 'Critical failed');
+      return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: 0, failed: true } };
+    }
+    if (critical.revealed === critical.flips.length) {
+      critical.outcome = 'passed'; critical.multiplier = critical.flips.length * 2; game.metrics.critSuccesses += critical.flips.length;
+      const message = `Critical success! x${critical.multiplier} potency.`;
+      log(game, message, 'good'); setCombatMessage(game, message, 'good', 'Critical success');
+      return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: critical.multiplier, failed: false } };
+    }
+    setCombatMessage(game, `Critical coin ${critical.revealed}/${critical.flips.length} succeeds!`, 'good', `Critical flip ${critical.revealed}/${critical.flips.length}`);
+    return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: 0, failed: false } };
+  }
+  if (!critical.outcome) {
+    critical.mode = 'spinning';
+    const nextFlip = critical.revealed + 1;
+    setCombatMessage(game, `Critical coin ${nextFlip}/${critical.flips.length} is flipping…`, 'event', `Critical flip ${nextFlip}/${critical.flips.length}`);
+    return { kind: 'critical-spin', side: 'hero', critical: { flip: nextFlip, total: critical.flips.length } };
+  }
+  resolution.pendingCritical = null;
+  let result;
+  if (critical.outcome === 'failed') {
+    discardAction(game, critical.item.action);
+    result = { side: 'hero', name: critical.item.data.name, initiative: critical.item.initiative, message: 'Critical gamble failed! x0.', type: 'bad', effects: [] };
+  } else result = resolveHeroAction(game, critical.item.action, critical.item.data, critical.item.initiative, critical.multiplier);
+  finishQueueItem(game, resolution, critical.item, result);
   return result;
 }
 export function finishRoundResolution(game) {
   if (game.phase !== 'resolving') return null;
   game.resolution = null;
-  if (game.hero.hp <= 0) { game.phase = 'summary'; log(game, 'Mara falls. The tavern grows quiet.', 'defeat'); return { finished: 'defeat' }; }
+  if (game.hero.hp <= 0) { game.phase = 'summary'; const message = 'Mara falls. The tavern grows quiet.'; log(game, message, 'defeat'); setCombatMessage(game, message, 'defeat', 'Defeat'); return { finished: 'defeat' }; }
   if (game.enemy.hp <= 0) { finishBattle(game); return { finished: 'victory' }; }
   game.phase = 'planning'; drawRound(game);
   return { finished: 'planning' };
@@ -110,27 +178,27 @@ export function resolveRound(game) {
   if (!startRoundResolution(game)) return;
   while (game.phase === 'resolving') resolveNextAction(game);
 }
-export function resolveHeroAction(game, action, data, initiative) {
-  const crits = tokenCount(action.assigned, TOKEN.CRITICAL); let multiplier = 1;
-  if (crits) { const passed = [...Array(crits)].every(() => game.rng() < 0.5); if (!passed) { game.metrics.critFailures++; const message = `${data.name} fails its Critical gamble.`; log(game, message, 'bad'); discardAction(game, action); return { side: 'hero', name: data.name, initiative, message, type: 'bad', effects: [] }; } game.metrics.critSuccesses += crits; multiplier = 1 + crits; }
-  const bonus = action.assigned.filter(t => data.bonus.includes(t)).length * 2; const health = tokenCount(action.assigned, TOKEN.HEALTH);
-  const amount = (data.potency + bonus + health) * multiplier;
+export function resolveHeroAction(game, action, data, initiative, multiplier = 1) {
+  const preview = actionPreview(action);
+  const amount = preview.potency * multiplier;
   let message; let effects;
-  if (data.kind === 'damage') { const before = game.enemy.hp; game.enemy.hp = Math.max(0, game.enemy.hp - amount); const applied = before - game.enemy.hp; message = `${data.name} deals ${applied} damage at initiative ${initiative}.`; effects = [{ target: 'enemy-hp', delta: -applied, label: `-${applied} HP` }]; }
-  if (data.kind === 'armor') { const before = game.hero.armor; game.hero.armor = Math.min(game.hero.maxHp, game.hero.armor + amount); const applied = game.hero.armor - before; message = `${data.name} adds ${applied} Armor.`; effects = [{ target: 'hero-armor', delta: applied, label: `+${applied} Armor` }]; }
-  if (data.kind === 'heal') { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + amount); const applied = game.hero.hp - before; message = `${data.name} restores ${applied} HP.`; effects = [{ target: 'hero-hp', delta: applied, label: `+${applied} HP` }]; }
+  const criticalText = multiplier > 1 ? ` x${multiplier}!` : '!';
+  const applyHealthBonus = () => { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + preview.healthAmount); return game.hero.hp - before; };
+  if (data.kind === 'damage') { const before = game.enemy.hp; game.enemy.hp = Math.max(0, game.enemy.hp - amount); const applied = before - game.enemy.hp; const recovered = applyHealthBonus(); message = `Mara uses ${data.name}${criticalText} ${game.enemy.name} takes ${applied} damage.${recovered ? ` Mara recovers ${recovered} HP.` : ''}`; effects = [{ target: 'enemy-hp', delta: -applied, label: `-${applied} HP` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
+  if (data.kind === 'armor') { const before = game.hero.armor; game.hero.armor = Math.min(game.hero.maxHp, game.hero.armor + amount); const applied = game.hero.armor - before; const recovered = applyHealthBonus(); message = `Mara uses ${data.name}${criticalText} Armor rises by ${applied}.${recovered ? ` Mara recovers ${recovered} HP.` : ''}`; effects = [{ target: 'hero-armor', delta: applied, label: `+${applied} Armor` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
+  if (data.kind === 'heal') { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + amount + preview.healthAmount); const applied = game.hero.hp - before; message = `Mara uses ${data.name}${criticalText} Mara recovers ${applied} HP.`; effects = [{ target: 'hero-hp', delta: applied, label: `+${applied} HP` }]; }
   log(game, message, 'good');
   game.metrics.actions++; action.evolved = !action.evolved; discardAction(game, action);
   return { side: 'hero', name: data.name, initiative, message, type: 'good', effects };
 }
 export function discardAction(game, action) { game.discard.push(...action.assigned); action.assigned = []; }
 export function resolveEnemyAction(game, card, initiative) {
-  if (card.kind === 'miss') { const message = `${game.enemy.name} misses at initiative ${initiative}.`; log(game, message, 'info'); return { side: 'enemy', name: card.name, initiative, message, type: 'info', effects: [] }; }
+  if (card.kind === 'miss') { const message = `${game.enemy.name} attacks, but misses!`; log(game, message, 'info'); return { side: 'enemy', name: card.name, initiative, message, type: 'info', effects: [] }; }
   const data = card.evolved && card.evolve ? { ...card, ...card.evolve } : card; let damage = data.potency; const absorbed = Math.min(game.hero.armor, damage); game.hero.armor -= absorbed; damage -= absorbed; const before = game.hero.hp; game.hero.hp = Math.max(0, game.hero.hp - damage); const applied = before - game.hero.hp;
-  const message = `${game.enemy.name}'s ${data.name} deals ${applied}${absorbed ? ` after ${absorbed} Armor` : ''}.`;
+  const message = `${game.enemy.name} uses ${data.name}! Mara takes ${applied} damage.${absorbed ? ` Armor absorbs ${absorbed}.` : ''}`;
   const effects = [ ...(absorbed ? [{ target: 'hero-armor', delta: -absorbed, label: `-${absorbed} Armor` }] : []), ...(applied ? [{ target: 'hero-hp', delta: -applied, label: `-${applied} HP` }] : []) ];
   log(game, message, applied ? 'bad' : 'good'); if (card.evolve) card.evolved = !card.evolved;
   return { side: 'enemy', name: data.name, initiative, message, type: applied ? 'bad' : 'good', effects };
 }
-export function finishBattle(game) { log(game, `${game.enemy.name} is defeated.`, 'victory'); if (game.battleIndex === ENCOUNTER.length - 1) { game.phase = 'summary'; log(game, 'The encounter is complete. Your story earns a round of applause.', 'victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'No rest—another shape moves in the candlelight.', 'event'); }
+export function finishBattle(game) { const victory = `${game.enemy.name} is defeated!`; log(game, victory, 'victory'); setCombatMessage(game, victory, 'victory', 'Victory'); if (game.battleIndex === ENCOUNTER.length - 1) { game.phase = 'summary'; const message = 'The encounter is complete. Your story earns a round of applause.'; log(game, message, 'victory'); setCombatMessage(game, message, 'victory', 'Victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'No rest—another shape moves in the candlelight.', 'event'); }
 export function continueBattle(game) { if (['intro', 'battle-transition'].includes(game.phase)) startBattle(game); }
