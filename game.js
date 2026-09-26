@@ -160,6 +160,21 @@ export function assignToken(game, reserveIndex, actionId) {
   if (game.phase !== 'planning') return false; const action = game.actions.find(a => a.id === actionId); const token = game.reserve[reserveIndex]; if (!action || !token || !compatible(action, token)) return false;
   action.assigned.push(token); game.reserve.splice(reserveIndex, 1); log(game, `${TOKEN_META[token].label} assigned to ${currentAction(action).name}.`); return true;
 }
+export function assignRequiredTokens(game, actionId) {
+  if (game.phase !== 'planning') return 0;
+  const action = game.actions.find(a => a.id === actionId);
+  if (!action) return 0;
+  let assigned = 0;
+  for (const type of [...new Set(action.base)]) {
+    const missing = tokenCount(action.base, type) - tokenCount(action.assigned, type);
+    for (let count = 0; count < missing; count++) {
+      const reserveIndex = game.reserve.findIndex(token => token === type);
+      if (reserveIndex < 0 || !assignToken(game, reserveIndex, actionId)) break;
+      assigned++;
+    }
+  }
+  return assigned;
+}
 export function removeToken(game, actionId, assignedIndex) { const action = game.actions.find(a => a.id === actionId); if (!action || game.reserve.length >= 8 || assignedIndex < 0) return false; const [token] = action.assigned.splice(assignedIndex, 1); if (!token) return false; game.reserve.push(token); log(game, `${TOKEN_META[token].label} returned to reserve.`); return true; }
 export function drawEnemyCard(game) { const enemy = game.enemy; if (!enemy.drawPile.length) { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); log(game, `${enemy.name}'s attack deck reshuffles.`, 'event'); } const index = enemy.drawPile.pop(); const card = enemy.cards[index]; enemy.remaining = enemy.drawPile.length; if (card.kind === 'miss') { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); enemy.remaining = enemy.drawPile.length; } return card; }
 export function startRoundResolution(game) {
