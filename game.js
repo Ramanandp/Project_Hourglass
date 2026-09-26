@@ -46,6 +46,13 @@ export const WATCHTOWER_QUEST = Object.freeze({
   risk: 'High risk', rewardGold: 25, expiration: 'Day 12',
 });
 
+export const INTRO_BEATS = Object.freeze([
+  { speaker: 'Innkeeper', text: 'Welcome back, Mara. Beyond these windows, a bored vampire waits for someone brave enough to face it alone.' },
+  { speaker: 'Innkeeper', text: 'Until that day, this table is where we keep the town alive: one tale, one favor, one returned adventurer at a time.' },
+  { speaker: 'Innkeeper', text: 'The board tells me what the town needs now. You tell me what you had done: which road you took, where you rested, and how you fought.' },
+  { speaker: 'Innkeeper', text: 'Each answer makes the tale true. Tell it well, and I will record what you brought home. Either way, this seat is waiting.' },
+]);
+
 export function seededRandom(seed = 8675309) { let state = seed >>> 0; return () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 4294967296; }; }
 export function shuffle(items, rng) { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
 export function buildBag(stats = HERO.stats) { return [ ...Array(stats.vitality).fill(TOKEN.HEALTH), ...Array(stats.strength).fill(TOKEN.PHYSICAL), ...Array(stats.intelligence).fill(TOKEN.MAGICAL), ...Array(stats.dexterity).fill(TOKEN.SPECIAL), ...Array(stats.speed).fill(TOKEN.SPEED), ...Array(stats.luck).fill(TOKEN.CRITICAL) ]; }
@@ -69,31 +76,52 @@ export function actionPreview(action) {
   return { data, basePotency: data.potency, potency: data.potency + bonus, bonus, health, healthAmount, baseInitiative: data.initiative, initiative: data.initiative + speed, speed, criticals, criticalMultiplier: criticals * 2 };
 }
 export function createGame(seed = Math.floor(Math.random() * 0x100000000)) {
-  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', day: 1, gold: 0, quest: null, completedQuest: false, questHistory: [], battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], drawSequence: 0, lastDraw: null, enemy: null, resolution: null, combatMessage: null };
+  const rng = seededRandom(seed); return { seed, rng, phase: 'intro-dialogue', day: 1, gold: 0, quest: null, completedQuest: false, questHistory: [], battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], drawSequence: 0, lastDraw: null, enemy: null, resolution: null, combatMessage: null, dialogue: { introStep: 0, introSeen: false, tavernResponse: null, boardOpen: false, homecoming: null } };
 }
 export function log(game, text, type = 'info') { game.log.unshift({ text, type }); }
 export function setCombatMessage(game, text, type = 'info', state = '') { game.combatMessage = { text, type, state }; }
+export function advanceIntro(game) {
+  if (game.phase !== 'intro-dialogue') return false;
+  if (game.dialogue.introStep < INTRO_BEATS.length - 1) { game.dialogue.introStep++; return true; }
+  game.dialogue.introSeen = true; game.phase = 'tavern'; return true;
+}
+export function skipIntro(game) {
+  if (game.phase !== 'intro-dialogue') return false;
+  game.dialogue.introStep = INTRO_BEATS.length - 1; game.dialogue.introSeen = true; game.phase = 'tavern'; return true;
+}
+export function chooseTavernResponse(game, response) {
+  if (game.phase !== 'tavern' || !['ready', 'curious', 'practical'].includes(response)) return false;
+  game.dialogue.tavernResponse = response; return true;
+}
+export function openQuestBoard(game) {
+  if (game.phase !== 'tavern' || !game.dialogue.tavernResponse || game.completedQuest) return false;
+  game.dialogue.boardOpen = true; return true;
+}
+export function beginQuestAcceptance(game) {
+  if (game.phase !== 'tavern' || !game.dialogue.tavernResponse || game.quest || game.completedQuest) return false;
+  game.phase = 'quest-confirmation'; return true;
+}
 export function acceptQuest(game, questId = WATCHTOWER_QUEST.id) {
-  if (!['intro', 'tavern'].includes(game.phase) || game.quest || game.completedQuest || questId !== WATCHTOWER_QUEST.id) return false;
+  if (game.phase !== 'quest-confirmation' || game.quest || game.completedQuest || questId !== WATCHTOWER_QUEST.id) return false;
   game.quest = { id: questId, startedDay: game.day, days: 0, currentNode: 'outbound', objectiveComplete: false, rested: false, cacheFound: false, bonusGold: 0, outcome: null };
-  game.phase = 'outbound-travel'; log(game, `Accepted: ${WATCHTOWER_QUEST.title}.`, 'event'); return true;
+  game.phase = 'outbound-travel'; log(game, `You had taken: ${WATCHTOWER_QUEST.title}.`, 'event'); return true;
 }
 export function chooseOutboundTravel(game, choice) {
   if (game.phase !== 'outbound-travel' || !game.quest || !['lantern', 'bramble'].includes(choice)) return false;
   const cautious = choice === 'lantern'; const days = cautious ? 2 : 1; const healing = cautious ? 2 : 0;
   advanceQuestDays(game, days); if (healing) game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + healing);
-  game.quest.currentNode = 'crossroads'; game.phase = 'quest-map'; log(game, cautious ? 'A lantern-lit detour keeps the road kind.' : 'The brambles scratch at Mara’s sleeves, but the shortcut holds.', 'event'); return true;
+  game.quest.currentNode = 'crossroads'; game.phase = 'quest-map'; log(game, cautious ? 'You had followed the lantern-lit detour; it kept the road kind.' : 'You had taken the brambles; the shortcut held despite torn sleeves.', 'event'); return true;
 }
 export function chooseQuestNode(game, node) {
   if (game.phase !== 'quest-map' || !game.quest) return false;
   if (node === 'rest' && !game.quest.rested && !game.quest.objectiveComplete) { game.quest.currentNode = 'shrine'; game.phase = 'rest'; return true; }
   if (node === 'watchtower' && !game.quest.objectiveComplete) return startQuestEncounter(game);
-  if (node === 'cache' && game.quest.objectiveComplete && !game.quest.cacheFound) { advanceQuestDays(game, 1); game.quest.currentNode = 'archive'; game.quest.cacheFound = true; game.quest.bonusGold += 10; log(game, 'A hidden cache yields 10 bonus gold.', 'good'); return true; }
+  if (node === 'cache' && game.quest.objectiveComplete && !game.quest.cacheFound) { advanceQuestDays(game, 1); game.quest.currentNode = 'archive'; game.quest.cacheFound = true; game.quest.bonusGold += 10; log(game, 'You had found a hidden cache: 10 bonus gold.', 'good'); return true; }
   return false;
 }
 export function restAtQuestNode(game, days) {
   if (game.phase !== 'rest' || !game.quest || ![1, 2].includes(days)) return false;
-  advanceQuestDays(game, days); game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + days * 5); game.quest.rested = true; game.quest.currentNode = 'shrine'; game.phase = 'quest-map'; log(game, `Rested safely for ${days} day${days === 1 ? '' : 's'}.`, 'good'); return true;
+  advanceQuestDays(game, days); game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + days * 5); game.quest.rested = true; game.quest.currentNode = 'shrine'; game.phase = 'quest-map'; log(game, `You had rested safely for ${days} day${days === 1 ? '' : 's'}.`, 'good'); return true;
 }
 export function startQuestEncounter(game) {
   if (game.phase !== 'quest-map' || !game.quest || game.quest.objectiveComplete) return false;
@@ -135,30 +163,31 @@ export function endQuest(game, outcome) {
   const reward = outcome === 'completed' ? WATCHTOWER_QUEST.rewardGold + quest.bonusGold : 0;
   game.gold += reward;
   game.questHistory.push({ title: WATCHTOWER_QUEST.title, outcome, days: quest.days, reward, cacheFound: quest.cacheFound });
+  game.dialogue.homecoming = outcome;
   game.completedQuest ||= outcome === 'completed'; game.quest = null; game.hero.armor = 0; game.actions.forEach(action => { action.evolved = false; action.assigned = []; });
   game.phase = 'quest-result'; game.enemy = null; game.resolution = null; game.reserve = []; game.bag = []; game.discard = [];
-  log(game, outcome === 'completed' ? `Quest complete. Earned ${reward} gold.` : `Quest ${outcome}; no rewards earned.`, outcome === 'completed' ? 'victory' : 'defeat'); return true;
+  log(game, outcome === 'completed' ? `You had completed the quest and earned ${reward} gold.` : `You had ${outcome} the quest; no reward was earned.`, outcome === 'completed' ? 'victory' : 'defeat'); return true;
 }
 export function returnToTavern(game) { if (game.phase !== 'quest-result') return false; game.phase = 'tavern'; return true; }
 export function startBattle(game) {
   game.bag = shuffle(buildBag(), game.rng); game.discard = []; game.reserve = []; game.actions.forEach(a => a.assigned = []); game.enemy = createEnemy(ENCOUNTER[game.battleIndex], game.rng); game.phase = 'planning';
-  const message = `A ${game.enemy.name} appears!`;
+  const message = `You had faced a ${game.enemy.name}.`;
   log(game, message, 'event'); setCombatMessage(game, message, 'event', `Battle ${game.battleIndex + 1}`); drawRound(game);
 }
-export function drawOne(game) { if (!game.bag.length && game.discard.length) { game.bag = shuffle(game.discard, game.rng); game.discard = []; log(game, 'The discard pile returns to your bag.', 'event'); } if (!game.bag.length) return null; return game.bag.pop(); }
+export function drawOne(game) { if (!game.bag.length && game.discard.length) { game.bag = shuffle(game.discard, game.rng); game.discard = []; log(game, 'The discarded tokens had returned to your bag.', 'event'); } if (!game.bag.length) return null; return game.bag.pop(); }
 export function drawRound(game) {
   game.round++; const startIndex = game.reserve.length; let drawn = [];
   const attempts = 4 + [...Array(4)].filter(() => game.rng() < HERO.stats.luck / (HERO.stats.luck + 20)).length;
   for (let i = 0; i < attempts && game.reserve.length < 8; i++) { const token = drawOne(game); if (token) { game.reserve.push(token); drawn.push(token); } }
   game.metrics.draws += drawn.length; game.drawSequence++; game.lastDraw = { sequence: game.drawSequence, startIndex, tokens: [...drawn] };
-  log(game, `Round ${game.round}: drew ${drawn.map(t => TOKEN_META[t].short).join(', ') || 'nothing'} (${game.reserve.length}/8 reserve).`, 'draw');
-  const message = `Round ${game.round}: allocate your tokens to prepare actions.`;
+  log(game, `In round ${game.round}, you had drawn ${drawn.map(t => TOKEN_META[t].short).join(', ') || 'nothing'} (${game.reserve.length}/8 reserve).`, 'draw');
+  const message = `In round ${game.round}, which tokens had you committed to your actions?`;
   log(game, message, 'event'); setCombatMessage(game, message, 'event', 'Allocate tokens');
   return drawn;
 }
 export function assignToken(game, reserveIndex, actionId) {
   if (game.phase !== 'planning') return false; const action = game.actions.find(a => a.id === actionId); const token = game.reserve[reserveIndex]; if (!action || !token || !compatible(action, token)) return false;
-  action.assigned.push(token); game.reserve.splice(reserveIndex, 1); log(game, `${TOKEN_META[token].label} assigned to ${currentAction(action).name}.`); return true;
+  action.assigned.push(token); game.reserve.splice(reserveIndex, 1); log(game, `You had committed ${TOKEN_META[token].label} to ${currentAction(action).name}.`); return true;
 }
 export function assignRequiredTokens(game, actionId) {
   if (game.phase !== 'planning') return 0;
@@ -175,8 +204,8 @@ export function assignRequiredTokens(game, actionId) {
   }
   return assigned;
 }
-export function removeToken(game, actionId, assignedIndex) { const action = game.actions.find(a => a.id === actionId); if (!action || game.reserve.length >= 8 || assignedIndex < 0) return false; const [token] = action.assigned.splice(assignedIndex, 1); if (!token) return false; game.reserve.push(token); log(game, `${TOKEN_META[token].label} returned to reserve.`); return true; }
-export function drawEnemyCard(game) { const enemy = game.enemy; if (!enemy.drawPile.length) { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); log(game, `${enemy.name}'s attack deck reshuffles.`, 'event'); } const index = enemy.drawPile.pop(); const card = enemy.cards[index]; enemy.remaining = enemy.drawPile.length; if (card.kind === 'miss') { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); enemy.remaining = enemy.drawPile.length; } return card; }
+export function removeToken(game, actionId, assignedIndex) { const action = game.actions.find(a => a.id === actionId); if (!action || game.reserve.length >= 8 || assignedIndex < 0) return false; const [token] = action.assigned.splice(assignedIndex, 1); if (!token) return false; game.reserve.push(token); log(game, `You had kept ${TOKEN_META[token].label} in reserve instead.`); return true; }
+export function drawEnemyCard(game) { const enemy = game.enemy; if (!enemy.drawPile.length) { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); log(game, `${enemy.name}'s attack deck had reshuffled.`, 'event'); } const index = enemy.drawPile.pop(); const card = enemy.cards[index]; enemy.remaining = enemy.drawPile.length; if (card.kind === 'miss') { enemy.drawPile = shuffle(enemy.cards.map((_, i) => i), game.rng); enemy.remaining = enemy.drawPile.length; } return card; }
 export function startRoundResolution(game) {
   if (game.phase !== 'planning') return false;
   game.phase = 'resolving';
@@ -185,7 +214,7 @@ export function startRoundResolution(game) {
   const queue = [...completed.map(action => { const preview = actionPreview(action); return { side: 'hero', action, data: preview.data, initiative: preview.initiative }; }), { side: 'enemy', data: enemyCard, initiative: enemyCard.initiative }]
     .sort((a, b) => b.initiative - a.initiative || (a.side === 'hero' ? -1 : 1));
   game.resolution = { queue, index: 0, last: null, resolved: [] };
-  setCombatMessage(game, 'Actions are set. The enemy prepares an attack.', 'event', 'Preparing actions');
+  setCombatMessage(game, 'Your actions had been set. The enemy’s next move was about to be revealed.', 'event', 'Remembering the exchange');
   return true;
 }
 export function resolveNextAction(game) {
@@ -209,13 +238,13 @@ export function finishQueueItem(game, resolution, item, result) {
   resolution.resolved.push({ side: result.side, name: result.name, type: result.type }); resolution.index++;
   resolution.last = result;
   const finalAction = game.hero.hp <= 0 || game.enemy.hp <= 0 || resolution.index >= resolution.queue.length;
-  setCombatMessage(game, result.message, result.type, finalAction ? 'Final action resolved' : (item.side === 'hero' ? 'Mara acts' : 'Enemy action revealed'));
+  setCombatMessage(game, result.message, result.type, finalAction ? 'The exchange concluded' : (item.side === 'hero' ? 'Your action' : 'Enemy action revealed'));
   if (finalAction) resolution.awaitingFinish = true;
 }
 export function beginCriticalGamble(game, resolution, item, crits) {
   const flips = [...Array(crits)].map(() => game.rng() < 0.5);
   resolution.pendingCritical = { item, flips, revealed: 0, mode: 'spinning', outcome: null, multiplier: 0 };
-  setCombatMessage(game, `Mara risks ${crits} Critical ${crits === 1 ? 'coin' : 'coins'}!`, 'event', `Critical flip 1/${crits}`);
+  setCombatMessage(game, `You had risked ${crits} Critical ${crits === 1 ? 'coin' : 'coins'}.`, 'event', `Critical flip 1/${crits}`);
   return { kind: 'critical-spin', side: 'hero', critical: { flip: 1, total: crits } };
 }
 export function advanceCriticalGamble(game, resolution) {
@@ -226,30 +255,30 @@ export function advanceCriticalGamble(game, resolution) {
     critical.mode = 'revealed';
     if (!success) {
       critical.outcome = 'failed'; critical.multiplier = 0; game.metrics.critFailures++;
-      const message = 'Critical gamble failed! x0.';
+      const message = 'Your Critical gamble had failed: x0.';
       log(game, message, 'bad'); setCombatMessage(game, message, 'bad', 'Critical failed');
       return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: 0, failed: true } };
     }
     if (critical.revealed === critical.flips.length) {
       critical.outcome = 'passed'; critical.multiplier = critical.flips.length * 2; game.metrics.critSuccesses += critical.flips.length;
-      const message = `Critical success! x${critical.multiplier} potency.`;
+      const message = `Your Critical gamble had succeeded: x${critical.multiplier} potency.`;
       log(game, message, 'good'); setCombatMessage(game, message, 'good', 'Critical success');
       return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: critical.multiplier, failed: false } };
     }
-    setCombatMessage(game, `Critical coin ${critical.revealed}/${critical.flips.length} succeeds!`, 'good', `Critical flip ${critical.revealed}/${critical.flips.length}`);
+    setCombatMessage(game, `Critical coin ${critical.revealed}/${critical.flips.length} had succeeded.`, 'good', `Critical flip ${critical.revealed}/${critical.flips.length}`);
     return { kind: 'critical-reveal', side: 'hero', critical: { flip: critical.revealed, total: critical.flips.length, success, multiplier: 0, failed: false } };
   }
   if (!critical.outcome) {
     critical.mode = 'spinning';
     const nextFlip = critical.revealed + 1;
-    setCombatMessage(game, `Critical coin ${nextFlip}/${critical.flips.length} is flipping…`, 'event', `Critical flip ${nextFlip}/${critical.flips.length}`);
+    setCombatMessage(game, `The next Critical coin was turning over…`, 'event', `Critical flip ${nextFlip}/${critical.flips.length}`);
     return { kind: 'critical-spin', side: 'hero', critical: { flip: nextFlip, total: critical.flips.length } };
   }
   resolution.pendingCritical = null;
   let result;
   if (critical.outcome === 'failed') {
     discardAction(game, critical.item.action);
-    result = { side: 'hero', name: critical.item.data.name, initiative: critical.item.initiative, message: 'Critical gamble failed! x0.', type: 'bad', effects: [] };
+    result = { side: 'hero', name: critical.item.data.name, initiative: critical.item.initiative, message: 'Your Critical gamble had failed: x0.', type: 'bad', effects: [] };
   } else result = resolveHeroAction(game, critical.item.action, critical.item.data, critical.item.initiative, critical.multiplier);
   finishQueueItem(game, resolution, critical.item, result);
   return result;
@@ -257,7 +286,7 @@ export function advanceCriticalGamble(game, resolution) {
 export function finishRoundResolution(game) {
   if (game.phase !== 'resolving') return null;
   game.resolution = null;
-  if (game.hero.hp <= 0) { if (game.quest) { endQuest(game, 'defeated'); return { finished: 'defeat' }; } game.phase = 'summary'; const message = 'Mara falls. The tavern grows quiet.'; log(game, message, 'defeat'); setCombatMessage(game, message, 'defeat', 'Defeat'); return { finished: 'defeat' }; }
+  if (game.hero.hp <= 0) { if (game.quest) { endQuest(game, 'defeated'); return { finished: 'defeat' }; } game.phase = 'summary'; const message = 'You had fallen. The tavern had grown quiet.'; log(game, message, 'defeat'); setCombatMessage(game, message, 'defeat', 'Defeat'); return { finished: 'defeat' }; }
   if (game.enemy.hp <= 0) { finishBattle(game); return { finished: 'victory' }; }
   game.phase = 'planning'; drawRound(game);
   return { finished: 'planning' };
@@ -270,23 +299,23 @@ export function resolveHeroAction(game, action, data, initiative, multiplier = 1
   const preview = actionPreview(action);
   const amount = preview.potency * multiplier;
   let message; let effects;
-  const criticalText = multiplier > 1 ? ` x${multiplier}!` : '!';
+  const criticalText = multiplier > 1 ? ` x${multiplier}!` : '.';
   const applyHealthBonus = () => { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + preview.healthAmount); return game.hero.hp - before; };
-  if (data.kind === 'damage') { const before = game.enemy.hp; game.enemy.hp = Math.max(0, game.enemy.hp - amount); const applied = before - game.enemy.hp; const recovered = applyHealthBonus(); message = `Mara uses ${data.name}${criticalText} ${game.enemy.name} takes ${applied} damage.${recovered ? ` Mara recovers ${recovered} HP.` : ''}`; effects = [{ target: 'enemy-hp', delta: -applied, label: `-${applied} HP` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
-  if (data.kind === 'armor') { const before = game.hero.armor; game.hero.armor = Math.min(game.hero.maxHp, game.hero.armor + amount); const applied = game.hero.armor - before; const recovered = applyHealthBonus(); message = `Mara uses ${data.name}${criticalText} Armor rises by ${applied}.${recovered ? ` Mara recovers ${recovered} HP.` : ''}`; effects = [{ target: 'hero-armor', delta: applied, label: `+${applied} Armor` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
-  if (data.kind === 'heal') { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + amount + preview.healthAmount); const applied = game.hero.hp - before; message = `Mara uses ${data.name}${criticalText} Mara recovers ${applied} HP.`; effects = [{ target: 'hero-hp', delta: applied, label: `+${applied} HP` }]; }
+  if (data.kind === 'damage') { const before = game.enemy.hp; game.enemy.hp = Math.max(0, game.enemy.hp - amount); const applied = before - game.enemy.hp; const recovered = applyHealthBonus(); message = `You had used ${data.name}${criticalText} ${game.enemy.name} had taken ${applied} damage.${recovered ? ` You had recovered ${recovered} HP.` : ''}`; effects = [{ target: 'enemy-hp', delta: -applied, label: `-${applied} HP` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
+  if (data.kind === 'armor') { const before = game.hero.armor; game.hero.armor = Math.min(game.hero.maxHp, game.hero.armor + amount); const applied = game.hero.armor - before; const recovered = applyHealthBonus(); message = `You had used ${data.name}${criticalText} Your Armor had risen by ${applied}.${recovered ? ` You had recovered ${recovered} HP.` : ''}`; effects = [{ target: 'hero-armor', delta: applied, label: `+${applied} Armor` }, ...(recovered ? [{ target: 'hero-hp', delta: recovered, label: `+${recovered} HP` }] : [])]; }
+  if (data.kind === 'heal') { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + amount + preview.healthAmount); const applied = game.hero.hp - before; message = `You had used ${data.name}${criticalText} You had recovered ${applied} HP.`; effects = [{ target: 'hero-hp', delta: applied, label: `+${applied} HP` }]; }
   log(game, message, 'good');
   game.metrics.actions++; action.evolved = !action.evolved; discardAction(game, action);
   return { side: 'hero', name: data.name, initiative, message, type: 'good', effects, evolvedActionId: action.id };
 }
 export function discardAction(game, action) { game.discard.push(...action.assigned); action.assigned = []; }
 export function resolveEnemyAction(game, card, initiative) {
-  if (card.kind === 'miss') { const message = `${game.enemy.name} attacks, but misses!`; log(game, message, 'info'); return { side: 'enemy', name: card.name, initiative, message, type: 'info', effects: [] }; }
+  if (card.kind === 'miss') { const message = `${game.enemy.name} had attacked, but missed.`; log(game, message, 'info'); return { side: 'enemy', name: card.name, initiative, message, type: 'info', effects: [] }; }
   const data = card.evolved && card.evolve ? { ...card, ...card.evolve } : card; let damage = data.potency; const absorbed = Math.min(game.hero.armor, damage); game.hero.armor -= absorbed; damage -= absorbed; const before = game.hero.hp; game.hero.hp = Math.max(0, game.hero.hp - damage); const applied = before - game.hero.hp;
-  const message = `${game.enemy.name} uses ${data.name}! Mara takes ${applied} damage.${absorbed ? ` Armor absorbs ${absorbed}.` : ''}`;
+  const message = `${game.enemy.name} had used ${data.name}. You had taken ${applied} damage.${absorbed ? ` Your Armor had absorbed ${absorbed}.` : ''}`;
   const effects = [ ...(absorbed ? [{ target: 'hero-armor', delta: -absorbed, label: `-${absorbed} Armor` }] : []), ...(applied ? [{ target: 'hero-hp', delta: -applied, label: `-${applied} HP` }] : []) ];
   log(game, message, applied ? 'bad' : 'good'); if (card.evolve) card.evolved = !card.evolved;
   return { side: 'enemy', name: data.name, initiative, message, type: applied ? 'bad' : 'good', effects };
 }
-export function finishBattle(game) { const victory = `${game.enemy.name} is defeated!`; log(game, victory, 'victory'); setCombatMessage(game, victory, 'victory', 'Victory'); if (game.battleIndex === ENCOUNTER.length - 1) { if (game.quest) { game.quest.objectiveComplete = true; game.quest.currentNode = 'watchtower'; game.phase = 'quest-map'; log(game, 'The Old Watchtower is clear. You may search its ruins or finish the quest.', 'victory'); return; } game.phase = 'summary'; const message = 'The encounter is complete. Your story earns a round of applause.'; log(game, message, 'victory'); setCombatMessage(game, message, 'victory', 'Victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'No rest—another shape moves in the candlelight.', 'event'); }
+export function finishBattle(game) { const victory = `${game.enemy.name} had been defeated.`; log(game, victory, 'victory'); setCombatMessage(game, victory, 'victory', 'Victory'); if (game.battleIndex === ENCOUNTER.length - 1) { if (game.quest) { game.quest.objectiveComplete = true; game.quest.currentNode = 'watchtower'; game.phase = 'quest-map'; log(game, 'The Old Watchtower had been cleared. What did you do next?', 'victory'); return; } game.phase = 'summary'; const message = 'The encounter had ended. The tavern answered with applause.'; log(game, message, 'victory'); setCombatMessage(game, message, 'victory', 'Victory'); return; } game.battleIndex++; game.phase = 'battle-transition'; log(game, 'Then another shape had moved through the candlelight.', 'event'); }
 export function continueBattle(game) { if (['intro', 'battle-transition'].includes(game.phase)) startBattle(game); }
