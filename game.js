@@ -184,7 +184,7 @@ export function startRoundResolution(game) {
   const enemyCard = drawEnemyCard(game);
   const queue = [...completed.map(action => { const preview = actionPreview(action); return { side: 'hero', action, data: preview.data, initiative: preview.initiative }; }), { side: 'enemy', data: enemyCard, initiative: enemyCard.initiative }]
     .sort((a, b) => b.initiative - a.initiative || (a.side === 'hero' ? -1 : 1));
-  game.resolution = { queue, index: 0, last: null };
+  game.resolution = { queue, index: 0, last: null, resolved: [] };
   setCombatMessage(game, 'Actions are set. The enemy prepares an attack.', 'event', 'Preparing actions');
   return true;
 }
@@ -206,7 +206,7 @@ export function resolveNextAction(game) {
   return result;
 }
 export function finishQueueItem(game, resolution, item, result) {
-  resolution.index++;
+  resolution.resolved.push({ side: result.side, name: result.name, type: result.type }); resolution.index++;
   resolution.last = result;
   const finalAction = game.hero.hp <= 0 || game.enemy.hp <= 0 || resolution.index >= resolution.queue.length;
   setCombatMessage(game, result.message, result.type, finalAction ? 'Final action resolved' : (item.side === 'hero' ? 'Mara acts' : 'Enemy action revealed'));
