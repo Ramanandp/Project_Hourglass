@@ -68,8 +68,8 @@ export function actionPreview(action) {
   const criticals = tokenCount(action.assigned, TOKEN.CRITICAL);
   return { data, basePotency: data.potency, potency: data.potency + bonus, bonus, health, healthAmount, baseInitiative: data.initiative, initiative: data.initiative + speed, speed, criticals, criticalMultiplier: criticals * 2 };
 }
-export function createGame(seed = 8675309) {
-  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', day: 1, gold: 0, quest: null, completedQuest: false, questHistory: [], battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], enemy: null, resolution: null, combatMessage: null };
+export function createGame(seed = Math.floor(Math.random() * 0x100000000)) {
+  const rng = seededRandom(seed); return { seed, rng, phase: 'intro', day: 1, gold: 0, quest: null, completedQuest: false, questHistory: [], battleIndex: 0, round: 0, hero: { ...HERO, hp: HERO.stats.vitality * 4, maxHp: HERO.stats.vitality * 4, armor: 0 }, actions: createActionState(), log: [], metrics: { draws: 0, actions: 0, critSuccesses: 0, critFailures: 0 }, bag: [], discard: [], reserve: [], drawSequence: 0, lastDraw: null, enemy: null, resolution: null, combatMessage: null };
 }
 export function log(game, text, type = 'info') { game.log.unshift({ text, type }); }
 export function setCombatMessage(game, text, type = 'info', state = '') { game.combatMessage = { text, type, state }; }
@@ -147,10 +147,10 @@ export function startBattle(game) {
 }
 export function drawOne(game) { if (!game.bag.length && game.discard.length) { game.bag = shuffle(game.discard, game.rng); game.discard = []; log(game, 'The discard pile returns to your bag.', 'event'); } if (!game.bag.length) return null; return game.bag.pop(); }
 export function drawRound(game) {
-  game.round++; let drawn = [];
+  game.round++; const startIndex = game.reserve.length; let drawn = [];
   const attempts = 4 + [...Array(4)].filter(() => game.rng() < HERO.stats.luck / (HERO.stats.luck + 20)).length;
   for (let i = 0; i < attempts && game.reserve.length < 8; i++) { const token = drawOne(game); if (token) { game.reserve.push(token); drawn.push(token); } }
-  game.metrics.draws += drawn.length;
+  game.metrics.draws += drawn.length; game.drawSequence++; game.lastDraw = { sequence: game.drawSequence, startIndex, tokens: [...drawn] };
   log(game, `Round ${game.round}: drew ${drawn.map(t => TOKEN_META[t].short).join(', ') || 'nothing'} (${game.reserve.length}/8 reserve).`, 'draw');
   const message = `Round ${game.round}: allocate your tokens to prepare actions.`;
   log(game, message, 'event'); setCombatMessage(game, message, 'event', 'Allocate tokens');
@@ -277,7 +277,7 @@ export function resolveHeroAction(game, action, data, initiative, multiplier = 1
   if (data.kind === 'heal') { const before = game.hero.hp; game.hero.hp = Math.min(game.hero.maxHp, game.hero.hp + amount + preview.healthAmount); const applied = game.hero.hp - before; message = `Mara uses ${data.name}${criticalText} Mara recovers ${applied} HP.`; effects = [{ target: 'hero-hp', delta: applied, label: `+${applied} HP` }]; }
   log(game, message, 'good');
   game.metrics.actions++; action.evolved = !action.evolved; discardAction(game, action);
-  return { side: 'hero', name: data.name, initiative, message, type: 'good', effects };
+  return { side: 'hero', name: data.name, initiative, message, type: 'good', effects, evolvedActionId: action.id };
 }
 export function discardAction(game, action) { game.discard.push(...action.assigned); action.assigned = []; }
 export function resolveEnemyAction(game, card, initiative) {
